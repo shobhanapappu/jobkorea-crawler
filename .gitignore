@@ -1,11 +1,12 @@
-__pycache__/
-*.pyc
-*.pyo
-*.pyd
-.venv/
-*.exe
-dist/
-build/
-*.egg-info/
-*.xlsx
-*.log
+echo __pycache__/ > .gitignore
+echo *.pyc >> .gitignore
+echo *.pyo >> .gitignore
+echo *.pyd >> .gitignore
+echo .venv/ >> .gitignore
+echo *.exe >> .gitignore
+echo dist/ >> .gitignore
+echo build/ >> .gitignore
+echo *.egg-info/ >> .gitignore
+echo *.xlsx >> .gitignore
+echo *.log >> .gitignore
+echo .idea/ >> .gitignore

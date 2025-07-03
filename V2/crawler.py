@@ -1,3 +1,5 @@
+from selenium.webdriver.support.ui import Select
+from bs4 import BeautifulSoup
 from selenium.webdriver.common.by import By
 from selenium.webdriver.support.ui import WebDriverWait
 from selenium.webdriver.support import expected_conditions as EC
@@ -49,17 +51,95 @@ class SiteCrawler(threading.Thread):
             time.sleep(0.1)  # Sleep in small increments to allow stop checks
 
     def _apply_filters(self, driver):
-        """Apply search filters: sort by posting date."""
+        """Apply search filters: select first recent search condition (Gwangju)."""
         try:
-            self.logger.info("Applying filter: sort by posting date")
-            sort_button = WebDriverWait(driver, 10).until(
-                EC.element_to_be_clickable((By.XPATH, '//select[@id="sorder"]/option[@value="reg_dt"]'))
-            )
-            sort_button.click()
-            self.logger.info("Filter applied: sorted by registration date")
-        except:
-            self.logger.error("Failed to apply filters")
+            self.logger.info("Applying filter: opening recent search conditions")
+            # Step 1: Click on 'recent search' button
+            recent_search_button = WebDriverWait(driver, 10).until(
+                EC.element_to_be_clickable((By.ID, "devSearchedTerms")))
+            recent_search_button.click()
 
+            # Step 2: Ensure devSearchedTermsLayer is visible before accessing
+            WebDriverWait(driver, 10).until(EC.visibility_of_element_located((By.ID, "devSearchedTermsLayer")))
+            old_inner_html = driver.execute_script("return document.getElementById('devSearchedTermsLayer').innerHTML;")
+            self.logger.info("Old innerHTML captured: %s", old_inner_html)
+
+            # Step 3: Load and replace with new content
+            with open('devSearchedTermsLayer.html', 'r', encoding='utf-8') as file:
+                new_content = file.read()
+            driver.execute_script("document.getElementById('devSearchedTermsLayer').innerHTML = arguments[0];",
+                                  new_content)
+            self.logger.info("New innerHTML applied")
+
+            # Step 4: Click on the first recent search option
+            first_option = WebDriverWait(driver, 10).until(EC.element_to_be_clickable((By.XPATH,
+                                                                                       '//div[@id="devSearchedTermsLayer"]//tbody/tr[1]/td[@class="tit dev-condition-select"]/span[@class="link"]')))
+            first_option.click()
+            self.logger.info("Filter applied: selected first recent search condition (Gwangju)")
+        except Exception as e:
+            self.logger.error(f"Failed to apply filters: {str(e)}")
+
+    def apply_exclude_viewed_filter(self, driver):
+        """Click the 'Exclude Viewed Posts' checkbox within the dev-gi-list div."""
+        try:
+            self.logger.info("Applying filter: clicking 'Exclude Viewed Posts' checkbox")
+            # Wait for the checkbox label to be present
+            exclude_viewed_checkbox = WebDriverWait(driver, 10).until(
+                EC.presence_of_element_located((
+                    By.XPATH,
+                    '//div[@id="dev-gi-list"]//div[@class="inp_imtWrap"]//label[@for="lb_imtConfirm"]'
+                ))
+            )
+            # Scroll the element into view
+            driver.execute_script("arguments[0].scrollIntoView({block: 'center', inline: 'center'});",
+                                  exclude_viewed_checkbox)
+            # Wait for the element to be clickable
+            WebDriverWait(driver, 10).until(
+                EC.element_to_be_clickable((
+                    By.XPATH,
+                    '//div[@id="dev-gi-list"]//div[@class="inp_imtWrap"]//label[@for="lb_imtConfirm"]'
+                ))
+            )
+            # Attempt standard click
+            try:
+                exclude_viewed_checkbox.click()
+            except:
+                # Fallback to JavaScript click if standard click fails
+                driver.execute_script("arguments[0].click();", exclude_viewed_checkbox)
+            self.logger.info("Filter applied: 'Exclude Viewed Posts' checkbox clicked")
+        except Exception as e:
+            self.logger.error(f"Failed to click 'Exclude Viewed Posts' checkbox: {str(e)}")
+
+
+    def select_registration_date_sort(self, driver):
+        """Select 'Registration Date' (등록일순) from the sorting dropdown within dev-gi-list."""
+        try:
+            self.logger.info("Selecting sort order: Registration Date (등록일순)")
+            # Wait for the dropdown to be present and locate it
+            sort_dropdown = WebDriverWait(driver, 10).until(
+                EC.presence_of_element_located((
+                    By.XPATH,
+                    '//div[@id="dev-gi-list"]//select[@id="orderTab"]'
+                ))
+            )
+            # Use Select class to interact with the dropdown
+            select = Select(sort_dropdown)
+            # Select the option with value="2" (Registration Date)
+            select.select_by_value("2")
+            self.logger.info("Sort order applied: Selected 'Registration Date' (등록일순)")
+        except Exception as e:
+            self.logger.error(f"Failed to select 'Registration Date' sort order: {str(e)}")
+
+    def _click_search_button(self, driver):
+        """Click the '선택된 조건 검색하기' button."""
+        try:
+            search_button = WebDriverWait(driver, 10).until(
+                EC.element_to_be_clickable((By.ID, "dev-btn-search"))
+            )
+            search_button.click()
+            self.logger.info("Clicked '선택된 조건 검색하기' button")
+        except Exception as e:
+            self.logger.error(f"Failed to click search button: {str(e)}")
     
 
     import time
@@ -69,18 +149,23 @@ class SiteCrawler(threading.Thread):
     from selenium.webdriver.common.action_chains import ActionChains
     from selenium.common.exceptions import ElementClickInterceptedException, TimeoutException, WebDriverException
 
+    from selenium.webdriver.support.ui import WebDriverWait
+    from selenium.webdriver.support import expected_conditions as EC
+    from selenium.webdriver.common.by import By
+
     def _scan_posts(self, driver):
-        """Scan job listings, navigate to details URL, check for contact info, and return to continue processing."""
+        """Scan job listings, open details URL in a new tab, check for contact info, close tab, and return to continue processing."""
         posts_data = []
         original_url = ""
 
         try:
-            # Store the original page URL
+            # Store the original page URL and window handle
             try:
                 original_url = driver.current_url
-                self.logger.info("Stored original URL")
+                original_window = driver.current_window_handle
+                self.logger.info("Stored original URL and window handle")
             except:
-                self.logger.error("Failed to store original URL")
+                self.logger.error("Failed to store original URL or window handle")
                 return []
 
             # Wait for job listing elements to load
@@ -88,7 +173,7 @@ class SiteCrawler(threading.Thread):
                 posts = WebDriverWait(driver, 20).until(
                     EC.presence_of_all_elements_located(
                         (By.XPATH,
-                         '//div[contains(@class, "Flex_display_flex__i0l0hl2 Flex_direction_column__i0l0hl4 h7nnv10")]')
+                         '//div[@id="dev-gi-list"]//tr[contains(@class, "devloopArea") and .//th[@scope="row"]//input[@type="checkbox"]]')
                     )
                 )
                 self.logger.info(f"Found {len(posts)} job posts")
@@ -108,8 +193,7 @@ class SiteCrawler(threading.Thread):
                     try:
                         posts = WebDriverWait(driver, 20).until(
                             EC.presence_of_all_elements_located(
-                                (By.XPATH,
-                                 '//div[contains(@class, "Flex_display_flex__i0l0hl2 Flex_direction_column__i0l0hl4 h7nnv10")]')
+                                (By.XPATH, '//tr[contains(@class, "devloopArea")]')
                             )
                         )
                         post = posts[i - 1]
@@ -142,10 +226,9 @@ class SiteCrawler(threading.Thread):
                         self.logger.error(f"Post {i} - Failed to check processed posts")
                         continue
 
-                    # Check for contact button
+                    # Check for contact button (using apply button as proxy)
                     try:
-                        contact_button = post.find_elements(By.XPATH,
-                                                            './/button[contains(@class, "SupportButton_root__1vwhuod0")]')
+                        contact_button = post.find_elements(By.XPATH, './/button[contains(@class, "tplBtn_1")]')
                         if not contact_button:
                             self.logger.info(f"Post {post_id}: No contact button, skipping")
                             continue
@@ -158,10 +241,10 @@ class SiteCrawler(threading.Thread):
                     try:
                         title_element = WebDriverWait(post, 15).until(
                             EC.presence_of_element_located(
-                                (By.XPATH, './/span[contains(@class, "Typography_variant_size18__344nw25")]')
+                                (By.XPATH, './/a[contains(@class, "link normalLog") and contains(@href, "GI_Read")]')
                             )
                         )
-                        title = title_element.text.strip()
+                        title = title_element.get_attribute('title').strip()
                         self.logger.info(f"Post {i} - Extracted title: {title}")
                     except:
                         self.logger.error(f"Post {i} - No title found")
@@ -172,7 +255,7 @@ class SiteCrawler(threading.Thread):
                     try:
                         company_element = WebDriverWait(post, 15).until(
                             EC.presence_of_element_located(
-                                (By.XPATH, './/span[contains(@class, "Typography_variant_size16__344nw26")]')
+                                (By.XPATH, './/a[contains(@href, "Co_Read")]')
                             )
                         )
                         company = company_element.text.strip()
@@ -184,37 +267,31 @@ class SiteCrawler(threading.Thread):
                     # Extract additional details
                     details = []
                     try:
-                        details_elements = post.find_elements(By.XPATH,
-                                                              './/span[contains(@class, "Typography_variant_size14__344nw27")]')
+                        details_elements = post.find_elements(By.XPATH, './/p[@class="etc"]/span[@class="cell"]')
                         details = [elem.text.strip() for elem in details_elements]
                         self.logger.info(f"Post {i} - Extracted details: {details}")
                     except:
                         self.logger.error(f"Post {i} - No additional details found")
 
-                    # Navigate to details URL
+                    # Open details URL in a new tab
                     try:
-                        self.logger.info(f"Post {post_id} - Navigating to details URL: {details_url}")
-                        driver.get(details_url)
+                        self.logger.info(f"Post {post_id} - Opening details URL in new tab: {details_url}")
+                        driver.execute_script(f"window.open('{details_url}', '_blank');")
+                        WebDriverWait(driver, 10).until(EC.number_of_windows_to_be(2))
+                        new_window = [handle for handle in driver.window_handles if handle != original_window][0]
+                        driver.switch_to.window(new_window)
                         WebDriverWait(driver, 20).until(
-                            EC.presence_of_element_located((By.XPATH, '//body'))  # Simple check to ensure page loads
+                            EC.presence_of_element_located((By.XPATH, '//body'))
                         )
-                        self.logger.info(f"Post {post_id} - Successfully navigated to details page")
+                        self.logger.info(f"Post {post_id} - Successfully switched to new tab")
                     except:
-                        self.logger.error(f"Post {post_id} - Failed to navigate to details page")
+                        self.logger.error(f"Post {post_id} - Failed to open or switch to new tab")
                         try:
-                            driver.get(original_url)
-                            WebDriverWait(driver, 20).until(
-                                EC.presence_of_all_elements_located(
-                                    (By.XPATH,
-                                     '//div[contains(@class, "Flex_display_flex__i0l0hl2 Flex_direction_column__i0l0hl4 h7nnv10")]')
-                                )
-                            )
-                            self.logger.info(
-                                f"Post {post_id} - Recovered to listings page after failed details navigation")
+                            driver.switch_to.window(original_window)
+                            self.logger.info(f"Post {post_id} - Switched back to original window")
                         except:
-                            self.logger.error(
-                                f"Post {post_id} - Failed to recover to listings page after details navigation")
-                            continue
+                            self.logger.error(f"Post {post_id} - Failed to switch back to original window")
+                        continue
 
                     manager_info = "Not found"
                     try:
@@ -241,20 +318,20 @@ class SiteCrawler(threading.Thread):
                             ActionChains(driver).move_to_element(contact_button).click().perform()
                             self.logger.info(
                                 f"Post {post_id} - Clicked 'Check your contact information' button via ActionChains")
-                            # Wait for contact info to become visible
                             WebDriverWait(driver, 10).until(
-                                EC.invisibility_of_element((By.XPATH, './/button[contains(@class, "devOpenCharge")]')))
+                                EC.invisibility_of_element((By.XPATH, './/button[contains(@class, "devOpenCharge")]'))
+                            )
                             self.logger.info(f"Post {post_id} - Contact button hidden, assuming contact info loaded")
                         except (ElementClickInterceptedException, TimeoutException, WebDriverException) as e:
                             self.logger.error(f"Post {post_id} - ActionChains click failed: {str(e)}")
-                            # Fallback to JavaScript click
                             try:
                                 driver.execute_script("arguments[0].click();", contact_button)
                                 self.logger.info(
                                     f"Post {post_id} - Clicked 'Check your contact information' button via JavaScript")
                                 WebDriverWait(driver, 10).until(
                                     EC.invisibility_of_element(
-                                        (By.XPATH, './/button[contains(@class, "devOpenCharge")]')))
+                                        (By.XPATH, './/button[contains(@class, "devOpenCharge")]'))
+                                )
                                 self.logger.info(
                                     f"Post {post_id} - Contact button hidden, assuming contact info loaded")
                             except:
@@ -265,141 +342,144 @@ class SiteCrawler(threading.Thread):
                         try:
                             phone = "Not found"
                             email = "Not found"
-                            # Try to get phone number
+                            name = "Not found"
+                            department = "Not found"
+
+                            # Try to get name
                             try:
-                                phone_element = WebDriverWait(contact_section, 5).until(
-                                    EC.presence_of_element_located(
-                                        (By.XPATH,
-                                         './/span[contains(@class, "tahoma") and not(contains(@class, "tplHide"))]'))
-                                )
-                                phone = phone_element.text.strip()
+                                name_element = driver.find_element(By.XPATH,
+                                                                   '(//div[contains(@class, "manager")]//dt)[1]/following-sibling::dd[1]')
+                                name = name_element.text.strip()
+                                self.logger.info(f"Post {post_id} - Extracted name: {name}")
+
+                            except:
+                                self.logger.warning(f"Post {post_id} - Name not found")
+                                print("Name: Not found")
+
+                            # Try to get phone numbers
+                            try:
+                                phone_elements = contact_section.find_elements(By.XPATH,
+                                                                               './/span[contains(@class, "tahoma") and not(contains(@class, "tplHide"))]')
+                                phone = ", ".join([elem.text.strip() for elem in phone_elements])
                                 self.logger.info(f"Post {post_id} - Extracted phone: {phone}")
+                                print(f"Phone: {phone}")
                             except:
                                 self.logger.warning(f"Post {post_id} - Phone number not found")
+
 
                             # Try to get email
                             try:
                                 email_element = WebDriverWait(driver, 5).until(
-                                    EC.presence_of_element_located(
-                                        (By.XPATH,
-                                         '//dd[not(contains(@class, "tplHide"))]//a[contains(@href, "mailto:")]'))
+                                    EC.presence_of_element_located((By.XPATH,
+                                                                    '//dd[not(contains(@class, "tplHide"))]//a[contains(@href, "mailto:")]'))
                                 )
                                 email = email_element.text.strip()
                                 self.logger.info(f"Post {post_id} - Extracted email: {email}")
+
                             except:
                                 self.logger.warning(f"Post {post_id} - Email not found")
+                                print("Email: Not found")
 
-                            # Check if either phone or email was found and extract job details if present
-                            if phone != "Not found" or email != "Not found":
-                                print("HELLLLOOOOOOO")
+                            # Check if any contact info was found and extract job details if present
+                            if phone != "Not found" or email != "Not found" or name != "Not found":
+
                                 job_details = {}
 
                                 try:
-                                    # Extract Experience Requirement
-                                    try:
-                                        experience = driver.find_element(By.CSS_SELECTOR,
-                                                                         ".tbCol dl.tbList dd strong.col_1").text.strip()
-                                        job_details["experience"] = experience
-                                        print(experience)  # Print the extracted experience
-                                    except NoSuchElementException:
-                                        job_details["experience"] = "Not found"
-                                        print("Experience requirement not found")
+                                    tb_row_element = driver.find_element(By.XPATH, '(//div[@class="tbRow clear"])[1]')
 
-                                    # Extract Education Requirement
+
+
+                                    # Assuming tb_row_element is a Selenium WebElement
+                                    source = tb_row_element.get_attribute("outerHTML")
+                                    soup = BeautifulSoup(source, 'html.parser')
+
+                                    # Extract Experience
                                     try:
-                                        education = \
-                                            driver.find_elements(By.CSS_SELECTOR, ".tbCol dl.tbList dd strong.col_1")[
-                                                1].text.strip()
+                                        experience = soup.select_one(
+                                            'div.tbCol dl.tbList dt:-soup-contains("경력") + dd').text.strip()
+                                        job_details["experience"] = experience
+                                        self.logger.info(f"Post {post_id} - Extracted experience: {experience}")
+                                        print(f"Experience: {experience}")
+                                    except AttributeError:
+                                        job_details["experience"] = "Not found"
+                                        self.logger.warning(f"Post {post_id} - Experience requirement not found")
+
+
+                                    # Extract Education
+                                    try:
+                                        education = soup.select_one(
+                                            'div.tbCol dl.tbList dt:-soup-contains("학력") + dd').text.strip()
                                         job_details["education"] = education
-                                        print(education)  # Print the extracted education
-                                    except (NoSuchElementException, IndexError):
+                                        self.logger.info(f"Post {post_id} - Extracted education: {education}")
+                                        print(f"Education: {education}")
+                                    except AttributeError:
                                         job_details["education"] = "Not found"
-                                        print("Education requirement not found")
+                                        self.logger.warning(f"Post {post_id} - Education requirement not found")
+
 
                                     # Extract Employment Type
                                     try:
-                                        employment_type = driver.find_element(By.CSS_SELECTOR,
-                                                                              ".tbCol dl.tbList ul.addList li strong.col_1").text.strip()
+                                        employment_types = soup.select(
+                                            'div.tbCol dl.tbList dt:-soup-contains("고용형태") + dd ul.addList li')
+                                        employment_type = ", ".join([elem.text.strip() for elem in employment_types])
                                         job_details["employment_type"] = employment_type
-                                        print(employment_type)  # Print the extracted employment type
-                                    except NoSuchElementException:
+                                        self.logger.info(
+                                            f"Post {post_id} - Extracted employment type: {employment_type}")
+                                        print(f"Employment Type: {employment_type}")
+                                    except AttributeError:
                                         job_details["employment_type"] = "Not found"
-                                        print("Employment type not found")
+                                        self.logger.warning(f"Post {post_id} - Employment type not found")
 
-                                    # Extract Additional Employment Info
-                                    try:
-                                        employment_info = driver.find_element(By.CSS_SELECTOR,
-                                                                              ".tbCol dl.tbList ul.addList li").text.strip()
-                                        job_details["employment_info"] = employment_info
-                                        print(employment_info)  # Print the extracted employment info
-                                    except NoSuchElementException:
-                                        job_details["employment_info"] = "Not found"
-                                        print("Additional employment info not found")
 
                                     # Extract Salary
                                     try:
-                                        salary = driver.find_element(By.CSS_SELECTOR,
-                                                                     ".tbCol dl.tbList dd em.dotum").text.strip() + " " + \
-                                                 driver.find_element(By.CSS_SELECTOR,
-                                                                     ".tbCol dl.tbList dd .tahoma").text.strip() + " million won or more"
+                                        salary = soup.select_one(
+                                            'div.tbCol dl.tbList dt:-soup-contains("급여") + dd').text.strip()
                                         job_details["salary"] = salary
-                                        print(salary)  # Print the extracted salary
-                                    except NoSuchElementException:
+                                        self.logger.info(f"Post {post_id} - Extracted salary: {salary}")
+                                        print(f"Salary: {salary}")
+                                    except AttributeError:
                                         job_details["salary"] = "Not found"
-                                        print("Salary not found")
+                                        self.logger.warning(f"Post {post_id} - Salary not found")
+
 
                                     # Extract Region
                                     try:
-                                        region = driver.find_element(By.CSS_SELECTOR,
-                                                                     ".tbCol dl.tbList dd a").text.strip()
+                                        region_elements = soup.select(
+                                            'div.tbCol dl.tbList dt:-soup-contains("지역") + dd a')
+                                        region = ", ".join([elem.text.strip() for elem in region_elements])
                                         job_details["region"] = region
-                                        print(region)  # Print the extracted region
-                                    except NoSuchElementException:
+                                        self.logger.info(f"Post {post_id} - Extracted region: {region}")
+                                        print(f"Region: {region}")
+                                    except AttributeError:
                                         job_details["region"] = "Not found"
-                                        print("Region not found")
+                                        self.logger.warning(f"Post {post_id} - Region not found")
+
 
                                     # Extract Working Hours
                                     try:
-                                        working_hours = driver.find_element(By.CSS_SELECTOR,
-                                                                            ".tbCol dl.tbList dd .tahoma").text.strip() + " " + \
-                                                        driver.find_elements(By.CSS_SELECTOR, ".tbCol dl.tbList dd")[
-                                                            3].text.strip()
+                                        working_hours = soup.select_one(
+                                            'div.tbCol dl.tbList dt:-soup-contains("시간") + dd').text.strip()
                                         job_details["working_hours"] = working_hours
-                                        print(working_hours)  # Print the extracted working hours
-                                    except (NoSuchElementException, IndexError):
+                                        self.logger.info(f"Post {post_id} - Extracted working hours: {working_hours}")
+                                        print(f"Working Hours: {working_hours}")
+                                    except AttributeError:
                                         job_details["working_hours"] = "Not found"
-                                        print("Working hours not found")
+                                        self.logger.warning(f"Post {post_id} - Working hours not found")
 
-                                    # Extract Industry
-                                    try:
-                                        industry = driver.find_element(By.CSS_SELECTOR,
-                                                                       ".tbCol.tbCoInfo dl.tbList dd").text.strip()
-                                        job_details["industry"] = industry
-                                        print(industry)  # Print the extracted industry
-                                    except NoSuchElementException:
-                                        job_details["industry"] = "Not found"
-                                        print("Industry not found")
-
-                                    # Extract Year of Establishment
-                                    try:
-                                        year_established = driver.find_element(By.CSS_SELECTOR,
-                                                                               ".tbCol.tbCoInfo dl.tbList dd span.tahoma").text.strip()
-                                        job_details["year_established"] = year_established
-                                        print(year_established)  # Print the extracted year of establishment
-                                    except NoSuchElementException:
-                                        job_details["year_established"] = "Not found"
-                                        print("Year of establishment not found")
 
                                     # Extract Corporate Form
                                     try:
-                                        corporate_form = \
-                                            driver.find_elements(By.CSS_SELECTOR, ".tbCol.tbCoInfo dl.tbList dd")[
-                                                2].text.strip()
+                                        corporate_form = soup.select_one(
+                                            'div.tbCol.tbCoInfo dl.tbList dt:-soup-contains("기업형태") + dd').text.strip()
                                         job_details["corporate_form"] = corporate_form
-                                        print(corporate_form)  # Print the extracted corporate form
-                                    except (NoSuchElementException, IndexError):
+                                        self.logger.info(f"Post {post_id} - Extracted corporate form: {corporate_form}")
+                                        print(f"Corporate Form: {corporate_form}")
+                                    except AttributeError:
                                         job_details["corporate_form"] = "Not found"
-                                        print("Corporate form not found")
+                                        self.logger.warning(f"Post {post_id} - Corporate form not found")
+
 
                                     # Add job details to posts_data
                                     posts_data.append({
@@ -408,7 +488,7 @@ class SiteCrawler(threading.Thread):
                                         'company': company,
                                         'details': details,
                                         'details_url': details_url,
-                                        'manager_info': f"Phone: {phone}, Email: {email}",
+                                        'manager_info': f"Name: {name}, Phone: {phone}, Email: {email}",
                                         'recruitment_details': job_details
                                     })
                                     self.known_post_ids.add(post_id)
@@ -422,15 +502,14 @@ class SiteCrawler(threading.Thread):
                                         'company': company,
                                         'details': details,
                                         'details_url': details_url,
-                                        'manager_info': f"Phone: {phone}, Email: {email}",
-                                        'recruitment_details': "Error extracting details"
+                                        'manager_info': f"Name: {name}, Phone: {phone}, Email: {email}",
+                                        'recruitment_details': {}
                                     })
                                     self.known_post_ids.add(post_id)
                                     self.logger.info(f"Post {post_id} - Appended with partial data due to error")
 
                             else:
                                 manager_info = "Not found"
-                                # Log DOM for debugging
                                 try:
                                     dom_snippet = driver.find_element(By.XPATH,
                                                                       '//div[contains(@class, "manager")]').get_attribute(
@@ -440,6 +519,7 @@ class SiteCrawler(threading.Thread):
                                     self.logger.debug(f"Post {post_id} - Failed to capture DOM snippet")
                                 self.logger.info(
                                     f"Post {post_id} - Extracted contact info (post-click): {manager_info}")
+                                print(f"Manager Info: {manager_info}")
 
                             # Wait for 10 seconds as per instructions
                             self._stoppable_sleep(10)
@@ -455,40 +535,40 @@ class SiteCrawler(threading.Thread):
                             except:
                                 self.logger.debug(f"Post {post_id} - Failed to capture DOM snippet")
                             manager_info = "Not found"
+                            print(f"Manager Info: {manager_info}")
 
                     except:
-                        self.logger.info(
-                            f"Post {post_id} - No contact information section found, returning to original URL")
-                        try:
-                            driver.get(original_url)
-                            WebDriverWait(driver, 20).until(
-                                EC.presence_of_all_elements_located(
-                                    (By.XPATH,
-                                     '//div[contains(@class, "Flex_display_flex__i0l0hl2 Flex_direction_column__i0l0hl4 h7nnv10")]')
-                                )
-                            )
-                            self.logger.info(f"Post {post_id} - Returned to listings page after no contact section")
-                        except:
-                            self.logger.error(
-                                f"Post {post_id} - Failed to return to listings page after no contact section")
-                        continue
+                        self.logger.info(f"Post {post_id} - No contact information section found, closing new tab")
+                        manager_info = "Not found"
 
-                    # Return to the original listings page
+
+                    # Close the new tab and switch back to the original window
                     try:
-                        driver.get(original_url)
+                        driver.close()
+                        self.logger.info(f"Post {post_id} - Closed new tab")
+                        driver.switch_to.window(original_window)
                         WebDriverWait(driver, 20).until(
                             EC.presence_of_all_elements_located(
-                                (By.XPATH,
-                                 '//div[contains(@class, "Flex_display_flex__i0l0hl2 Flex_direction_column__i0l0hl4 h7nnv10")]')
+                                (By.XPATH, '//tr[contains(@class, "devloopArea")]')
                             )
                         )
-                        self.logger.info(f"Post {post_id} - Returned to listings page")
+                        self.logger.info(f"Post {post_id} - Switched back to original window")
                     except:
-                        self.logger.error(f"Post {post_id} - Failed to return to listings page")
-                        continue
+                        self.logger.error(f"Post {post_id} - Failed to close new tab or switch back")
+                        try:
+                            driver.switch_to.window(original_window)
+                            WebDriverWait(driver, 20).until(
+                                EC.presence_of_all_elements_located(
+                                    (By.XPATH, '//tr[contains(@class, "devloopArea")]')
+                                )
+                            )
+                            self.logger.info(f"Post {post_id} - Recovered to original window")
+                        except:
+                            self.logger.error(f"Post {post_id} - Failed to recover to original window")
+                            continue
 
                     # Append data to posts_data (for cases where no job details are extracted)
-                    if phone == "Not found" and email == "Not found":
+                    if manager_info == "Not found":
                         try:
                             posts_data.append({
                                 'id': post_id,
@@ -496,8 +576,8 @@ class SiteCrawler(threading.Thread):
                                 'company': company,
                                 'details': details,
                                 'details_url': details_url,
-                                'manager_info': manager_info,
-                                'recruitment_details': ""  # Hard-coded as per user acceptance
+                                'manager_info': "Not found",
+                                'recruitment_details': {}  # Use empty dict instead of empty string
                             })
                             self.known_post_ids.add(post_id)
                             self.logger.info(f"Post {post_id} extracted successfully")
@@ -507,27 +587,35 @@ class SiteCrawler(threading.Thread):
                 except:
                     self.logger.error(f"Post {i} - General processing error")
                     try:
+                        driver.switch_to.window(original_window)
                         driver.get(original_url)
                         WebDriverWait(driver, 20).until(
                             EC.presence_of_all_elements_located(
-                                (By.XPATH,
-                                 '//div[contains(@class, "Flex_display_flex__i0l0hl2 Flex_direction_column__i0l0hl4 h7nnv10")]')
+                                (By.XPATH, '//tr[contains(@class, "devloopArea")]')
                             )
                         )
-                        self.logger.info(f"Post {i} - Recovered to listings page")
+                        self.logger.info(f"Post {i} - Recovered to original window and listings page")
                     except:
-                        self.logger.error(f"Post {i} - Failed to recover to listings page")
+                        self.logger.error(f"Post {i} - Failed to recover to original window or listings page")
                     continue
+
+            # Ensure we're back in the original window before returning
+            try:
+                driver.switch_to.window(original_window)
+                self.logger.info("Ensured final switch to original window")
+            except:
+                self.logger.error("Failed to ensure final switch to original window")
 
             return posts_data
 
         except:
             self.logger.error("General error in scanning posts")
             try:
+                driver.switch_to.window(original_window)
                 driver.get(original_url)
-                self.logger.info("Returned to original URL after general error")
+                self.logger.info("Returned to original URL and window after general error")
             except:
-                self.logger.error("Failed to return to original URL")
+                self.logger.error("Failed to return to original URL or window")
             return []
     def run(self):
         """Main crawling loop with pagination."""
@@ -539,14 +627,28 @@ class SiteCrawler(threading.Thread):
 
             while not self._stop.is_set():
                 try:
-                    driver.get("https://www.jobkorea.co.kr/Search/")
+                    driver.get("https://www.jobkorea.co.kr/recruit/joblist?menucode=local&localorder=1")
                     self._apply_filters(driver)  # Apply sorting filter
+                    time.sleep(5)
+
+
+
+                    self._click_search_button(driver)  # Click the search button
+                    time.sleep(5)
+
+                    self.select_registration_date_sort(driver)
+                    time.sleep(5)
+
+                    self.apply_exclude_viewed_filter(driver)
+                    time.sleep(5)
                     current_page = 1
+                    time.sleep(5)
                     total_pages = None
 
                     while not self._stop.is_set():
                         # Scan posts on the current page
                         new_posts = self._scan_posts(driver)
+
                         if self._stop.is_set():
                             self.logger.info("Stop signal received, exiting scan loop")
                             break
@@ -558,41 +660,50 @@ class SiteCrawler(threading.Thread):
 
                         # Find the next page link
                         try:
+
                             # Get all pagination links to determine total pages
                             if total_pages is None:
+
                                 pagination_links = WebDriverWait(driver, 10).until(
                                     EC.presence_of_all_elements_located(
-                                        (By.XPATH, '//nav[@aria-label="pagination"]//a[contains(@href, "Page_No")]')
+                                        (By.CSS_SELECTOR, '#dev-gi-list .tplPagination.newVer ul li a')
                                     )
                                 )
+
                                 page_numbers = []
                                 for link in pagination_links:
                                     href = link.get_attribute('href')
-                                    if 'Page_No=' in href:
+                                    if '_GI_List?Page=' in href:
                                         try:
-                                            page_num = int(href.split('Page_No=')[1].split('&')[0])
+                                            page_num = int(href.split('_GI_List?Page=')[1])
                                             page_numbers.append(page_num)
                                         except ValueError:
                                             continue
                                 total_pages = max(page_numbers) if page_numbers else current_page
                                 self.logger.info(f"Total pages detected: {total_pages}")
 
-                            # Check if there's a next page
-                            next_button = driver.find_elements(By.XPATH,
-                                                               '//nav[@aria-label="pagination"]//a[contains(., "Next")]')
+                            try:
+                                next_button = driver.find_element(By.CSS_SELECTOR, '#dev-gi-list .btnPgnNext')
+                                print("Next button found inside #dev-gi-list, clicking...")
+                                # next_button.click()
+                            except:
+                                print("No next page button found inside #dev-gi-list.")
+
                             if not next_button or current_page >= total_pages:
                                 self.logger.info("No more pages to crawl or reached last page")
                                 break
 
+                            time.sleep(5)
+
                             # Navigate to the next page
                             current_page += 1
-                            next_page_url = f"https://www.jobkorea.co.kr/Search?Page_No={current_page}"
+                            next_page_url = f"https://www.jobkorea.co.kr/recruit/joblist?menucode=local&localorder=1#anchorGICnt_{current_page}"
                             self.logger.info(f"Navigating to page {current_page}: {next_page_url}")
                             driver.get(next_page_url)
                             WebDriverWait(driver, 20).until(
                                 EC.presence_of_all_elements_located(
                                     (By.XPATH,
-                                     '//div[contains(@class, "Flex_display_flex__i0l0hl2 Flex_direction_column__i0l0hl4 h7nnv10")]')
+                                     '//div[@id="dev-gi-list"]//tr[contains(@class, "devloopArea") and .//th[@scope="row"]//input[@type="checkbox"]]')
                                 )
                             )
 
@@ -615,7 +726,6 @@ class SiteCrawler(threading.Thread):
                 except Exception as e:
                     self.logger.error(f"Crawler loop error: {str(e)}")
                     self._stoppable_sleep(10)  # Brief pause before retry
-
         except Exception as e:
             self.logger.error(f"Crawler initialization error: {str(e)}")
         finally:
